@@ -5,18 +5,23 @@ import { join } from 'node:path';
 
 const I = process.env.MAKEFUN_INPUT_DIR ?? '/input';
 const O = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
-// [immediate bytes, pops, pushes] per opcode byte.
-const T: Record<number, [number, number, number]> = {
-  0: [0, 0, 0], 1: [1, 0, 1], 2: [4, 0, 1], 3: [0, 1, 0], 4: [0, 1, 2],
-  5: [0, 2, 2], 6: [0, 2, 3], 7: [0, 3, 3],
-  16: [0, 2, 1], 17: [0, 2, 1], 18: [0, 2, 1], 19: [0, 2, 1], 20: [0, 2, 1],
-  21: [0, 2, 1], 22: [0, 2, 1], 23: [0, 1, 1], 24: [0, 2, 1], 25: [0, 2, 1],
-  26: [0, 2, 1], 27: [0, 1, 1], 28: [0, 2, 1], 29: [0, 2, 1], 30: [0, 2, 1],
-  32: [0, 2, 1], 33: [0, 2, 1], 34: [0, 2, 1],
-  48: [2, 0, 0], 49: [2, 1, 0], 50: [2, 1, 0], 51: [2, 0, 0], 52: [0, 0, 0],
-  64: [0, 1, 1], 65: [0, 2, 0],
-  80: [0, 1, 0], 81: [0, 1, 0], 82: [0, 0, 1], 83: [0, 1, 0],
-};
+// Per-opcode [immediate bytes + 1, pops, pushes] packed into one flat typed
+// array (3 bytes per opcode; a 0 in the first slot marks an undefined opcode,
+// so opcodes 0 and 52, whose real triple is all zeros, still decode). The hot
+// loop reads it with plain integer indexing instead of an object-table lookup
+// plus array destructuring on every step.
+const T = new Uint8Array(768);
+for (const [o, i, a, b] of [
+  [0, 1, 0, 0], [1, 2, 0, 1], [2, 5, 0, 1], [3, 1, 1, 0], [4, 1, 1, 2],
+  [5, 1, 2, 2], [6, 1, 2, 3], [7, 1, 3, 3],
+  [16, 1, 2, 1], [17, 1, 2, 1], [18, 1, 2, 1], [19, 1, 2, 1], [20, 1, 2, 1],
+  [21, 1, 2, 1], [22, 1, 2, 1], [23, 1, 1, 1], [24, 1, 2, 1], [25, 1, 2, 1],
+  [26, 1, 2, 1], [27, 1, 1, 1], [28, 1, 2, 1], [29, 1, 2, 1], [30, 1, 2, 1],
+  [32, 1, 2, 1], [33, 1, 2, 1], [34, 1, 2, 1],
+  [48, 3, 0, 0], [49, 3, 1, 0], [50, 3, 1, 0], [51, 3, 0, 0], [52, 1, 0, 0],
+  [64, 1, 1, 1], [65, 1, 2, 0],
+  [80, 1, 1, 0], [81, 1, 1, 0], [82, 1, 0, 1], [83, 1, 1, 0],
+]) { const k = o * 3; T[k] = i; T[k + 1] = a; T[k + 2] = b; }
 
 function run(p: Uint8Array, inp: Uint8Array): [Uint8Array, number] {
   const n = p.length;
@@ -27,9 +32,9 @@ function run(p: Uint8Array, inp: Uint8Array): [Uint8Array, number] {
   for (;;) {
     if (steps === 1000000) return end(10);
     if (pc < 0 || pc >= n) return end(9);
-    const op = p[pc], t = T[op];
-    if (!t) return end(5);
-    const [imm, pops, pushes] = t;
+    const op = p[pc], k = op * 3, imm = T[k] - 1;
+    if (imm < 0) return end(5);
+    const pops = T[k + 1], pushes = T[k + 2];
     if (pc + imm >= n) return end(9);
     steps++;
     const nx = pc + 1 + imm;
